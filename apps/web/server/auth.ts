@@ -13,6 +13,7 @@ import { Provider } from "next-auth/providers/index";
 import { db } from "@karakeep/db";
 import {
   accounts,
+  customPrompts,
   sessions,
   users,
   verificationTokens,
@@ -82,11 +83,18 @@ const CustomProvider = (): Adapter => {
   return {
     ...adapter,
     createUser: async (user: Omit<AdapterUser, "id">) => {
-      return await User.createRaw(db, {
+      const newUser = await User.createRaw(db, {
         name: user.name ?? "",
         email: user.email,
         emailVerified: user.emailVerified,
       });
+      await db.insert(customPrompts).values({
+        userId: newUser.id,
+        text: "Utilise de préférence les tags existants de cette liste si ils sont pertinents : $tags. Crée de nouveaux tags seulement si aucun existant ne convient. Tags en minuscules et concis.",
+        appliesTo: "all_tagging",
+        enabled: true,
+      });
+      return newUser;
     },
   };
 };
