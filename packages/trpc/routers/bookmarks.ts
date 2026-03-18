@@ -42,6 +42,7 @@ import {
   zBookmarkSchema,
   zGetBookmarksRequestSchema,
   zGetBookmarksResponseSchema,
+  zGetSharedFeedRequestSchema,
   zManipulatedTagSchema,
   zNewBookmarkRequestSchema,
   zSearchBookmarksCursor,
@@ -837,6 +838,17 @@ export const bookmarksAppRouter = router({
     .output(zGetBookmarksResponseSchema)
     .query(async ({ input, ctx }) => {
       const res = await Bookmark.loadMulti(ctx, input);
+      return {
+        bookmarks: res.bookmarks.map((b) => b.asZBookmark()),
+        nextCursor: res.nextCursor,
+      };
+    }),
+
+  getSharedFeed: authedProcedure
+    .input(zGetSharedFeedRequestSchema)
+    .output(zGetBookmarksResponseSchema)
+    .query(async ({ input, ctx }) => {
+      const res = await Bookmark.loadSharedFeed(ctx, input);
       return {
         bookmarks: res.bookmarks.map((b) => b.asZBookmark()),
         nextCursor: res.nextCursor,

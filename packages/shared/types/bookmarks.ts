@@ -112,6 +112,8 @@ export const zBareBookmarkSchema = z.object({
   summary: z.string().nullish(),
   source: zBookmarkSourceSchema.nullish(),
   userId: z.string(),
+  ownerName: z.string().nullish(),
+  ownerImage: z.string().nullish(),
 });
 
 export type ZBareBookmark = z.infer<typeof zBareBookmarkSchema>;
@@ -219,6 +221,14 @@ export const zGetBookmarksResponseSchema = z.object({
   nextCursor: zCursorV2.nullable(),
 });
 export type ZGetBookmarksResponse = z.infer<typeof zGetBookmarksResponseSchema>;
+
+export const zGetSharedFeedRequestSchema = z.object({
+  limit: z.number().max(MAX_NUM_BOOKMARKS_PER_PAGE).optional(),
+  cursor: zCursorV2.nullish(),
+  useCursorV2: z.boolean().optional(),
+  sortOrder: zSortOrder.exclude(["relevance"]).optional().default("desc"),
+});
+export type ZGetSharedFeedRequest = z.infer<typeof zGetSharedFeedRequestSchema>;
 
 // PATCH /v1/bookmarks/[bookmarkId]
 export const zUpdateBookmarksRequestSchema = z.object({

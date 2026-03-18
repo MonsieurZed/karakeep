@@ -15,6 +15,7 @@ import {
   ClipboardList,
   Highlighter,
   Home,
+  Rss,
   Search,
   Tag,
 } from "lucide-react";
@@ -85,6 +86,11 @@ export default async function Dashboard({
         name: t("common.archive"),
         icon: <Archive size={18} />,
         path: "/dashboard/archive",
+      },
+      {
+        name: "Fil partagé",
+        icon: <Rss size={18} />,
+        path: "/dashboard/shared",
       },
     ].flat();
 

@@ -78,7 +78,19 @@ function BottomRow({
   );
 }
 
-function OwnerIndicator({ bookmark }: { bookmark: ZBookmark }) {
+function SharedFeedOwnerBadge({ bookmark }: { bookmark: ZBookmark }) {
+  if (!bookmark.ownerName) return null;
+  return (
+    <div className="absolute right-2 top-2 z-40 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+      <BookmarkOwnerIcon
+        ownerName={bookmark.ownerName}
+        ownerAvatar={bookmark.ownerImage ?? null}
+      />
+    </div>
+  );
+}
+
+function CollaborativeListOwnerIndicator({ bookmark }: { bookmark: ZBookmark }) {
   const api = useTRPC();
   const listContext = useBookmarkListContext();
   const collaborators = useQuery(
@@ -113,6 +125,13 @@ function OwnerIndicator({ bookmark }: { bookmark: ZBookmark }) {
       <BookmarkOwnerIcon ownerName={owner.name} ownerAvatar={owner.image} />
     </div>
   );
+}
+
+function OwnerIndicator({ bookmark }: { bookmark: ZBookmark }) {
+  if (bookmark.ownerName) {
+    return <SharedFeedOwnerBadge bookmark={bookmark} />;
+  }
+  return <CollaborativeListOwnerIndicator bookmark={bookmark} />;
 }
 
 function MultiBookmarkSelector({ bookmark }: { bookmark: ZBookmark }) {

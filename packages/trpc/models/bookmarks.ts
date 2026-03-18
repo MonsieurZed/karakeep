@@ -28,6 +28,7 @@ import {
   bookmarkTexts,
   rssFeedImportsTable,
   tagsOnBookmarks,
+  users,
 } from "@karakeep/db/schema";
 import { SearchIndexingQueue, triggerWebhook } from "@karakeep/shared-server";
 import { deleteAsset, readAsset } from "@karakeep/shared/assetdb";
@@ -39,6 +40,7 @@ import {
   ZBookmark,
   ZBookmarkContent,
   zGetBookmarksRequestSchema,
+  zGetSharedFeedRequestSchema,
   ZPublicBookmark,
 } from "@karakeep/shared/types/bookmarks";
 import { ZCursor } from "@karakeep/shared/types/pagination";
@@ -736,6 +738,216 @@ export class Bookmark extends BareBookmark {
         id: nextItem.id,
         createdAt: nextItem.createdAt,
       };
+    }
+
+    return {
+      bookmarks: bookmarksArr.map((b) => Bookmark.fromData(ctx, b)),
+      nextCursor,
+    };
+  }
+
+  static async loadSharedFeed(
+    ctx: AuthedContext,
+    input: z.infer<typeof zGetSharedFeedRequestSchema>,
+  ): Promise<{
+    bookmarks: Bookmark[];
+    nextCursor: ZCursor | null;
+  }> {
+    if (!input.limit) {
+      input.limit = DEFAULT_NUM_BOOKMARKS_PER_PAGE;
+    }
+
+    const buildCursorCondition = (
+      createdAtCol: typeof bookmarks.createdAt,
+      idCol: typeof bookmarks.id,
+    ): SQL | undefined => {
+      if (!input.cursor) return undefined;
+      if (input.sortOrder === "asc") {
+        return or(
+          gt(createdAtCol, input.cursor.createdAt),
+          and(
+            eq(createdAtCol, input.cursor.createdAt),
+            gte(idCol, input.cursor.id),
+          ),
+        );
+      }
+      return or(
+        lt(createdAtCol, input.cursor.createdAt),
+        and(
+          eq(createdAtCol, input.cursor.createdAt),
+          lte(idCol, input.cursor.id),
+        ),
+      );
+    };
+
+    const buildOrderBy = () =>
+      [
+        input.sortOrder === "asc"
+          ? asc(bookmarks.createdAt)
+          : desc(bookmarks.createdAt),
+        desc(bookmarks.id),
+      ] as const;
+
+    const sq = ctx.db.$with("bookmarksSq").as(
+      ctx.db
+        .select()
+        .from(bookmarks)
+        .where(
+          and(
+            eq(bookmarks.archived, false),
+            buildCursorCondition(bookmarks.createdAt, bookmarks.id),
+          ),
+        )
+        .limit(input.limit + 1)
+        .orderBy(...buildOrderBy()),
+    );
+
+    const results = await ctx.db
+      .with(sq)
+      .select()
+      .from(sq)
+      .leftJoin(tagsOnBookmarks, eq(sq.id, tagsOnBookmarks.bookmarkId))
+      .leftJoin(bookmarkTags, eq(tagsOnBookmarks.tagId, bookmarkTags.id))
+      .leftJoin(bookmarkLinks, eq(bookmarkLinks.id, sq.id))
+      .leftJoin(bookmarkTexts, eq(bookmarkTexts.id, sq.id))
+      .leftJoin(bookmarkAssets, eq(bookmarkAssets.id, sq.id))
+      .leftJoin(assets, eq(assets.bookmarkId, sq.id))
+      .leftJoin(users, eq(users.id, sq.userId))
+      .orderBy(desc(sq.createdAt), desc(sq.id));
+
+    const bookmarksRes = results.reduce<Record<string, ZBookmark>>(
+      (acc, row) => {
+        const bookmarkId = row.bookmarksSq.id;
+        if (!acc[bookmarkId]) {
+          let content: ZBookmarkContent;
+          if (row.bookmarkLinks) {
+            content = {
+              type: BookmarkTypes.LINK,
+              url: row.bookmarkLinks.url,
+              title: row.bookmarkLinks.title,
+              description: row.bookmarkLinks.description,
+              imageUrl: row.bookmarkLinks.imageUrl,
+              favicon: row.bookmarkLinks.favicon,
+              htmlContent: null,
+              contentAssetId: row.bookmarkLinks.contentAssetId,
+              crawlStatus: row.bookmarkLinks.crawlStatus,
+              crawledAt: row.bookmarkLinks.crawledAt,
+              author: row.bookmarkLinks.author,
+              publisher: row.bookmarkLinks.publisher,
+              datePublished: row.bookmarkLinks.datePublished,
+              dateModified: row.bookmarkLinks.dateModified,
+            };
+          } else if (row.bookmarkTexts) {
+            content = {
+              type: BookmarkTypes.TEXT,
+              text: row.bookmarkTexts.text ?? "",
+              sourceUrl: row.bookmarkTexts.sourceUrl ?? null,
+            };
+          } else if (row.bookmarkAssets) {
+            content = {
+              type: BookmarkTypes.ASSET,
+              assetId: row.bookmarkAssets.assetId,
+              assetType: row.bookmarkAssets.assetType,
+              fileName: row.bookmarkAssets.fileName,
+              sourceUrl: row.bookmarkAssets.sourceUrl ?? null,
+              size: null,
+              content: null,
+            };
+          } else {
+            content = { type: BookmarkTypes.UNKNOWN };
+          }
+          acc[bookmarkId] = {
+            ...row.bookmarksSq,
+            ownerName: row.users?.name ?? null,
+            ownerImage: row.users?.image ?? null,
+            content,
+            tags: [],
+            assets: [],
+          };
+        }
+
+        if (
+          row.bookmarkTags &&
+          !acc[bookmarkId].tags.some((t) => t.id === row.bookmarkTags!.id)
+        ) {
+          invariant(
+            row.tagsOnBookmarks,
+            "if bookmark tag is set, its many-to-many relation must also be set",
+          );
+          acc[bookmarkId].tags.push({
+            ...row.bookmarkTags,
+            attachedBy: row.tagsOnBookmarks.attachedBy,
+          });
+        }
+
+        if (
+          row.assets &&
+          !acc[bookmarkId].assets.some((a) => a.id === row.assets!.id)
+        ) {
+          if (acc[bookmarkId].content.type === BookmarkTypes.LINK) {
+            const content = acc[bookmarkId].content;
+            invariant(content.type === BookmarkTypes.LINK);
+            if (row.assets.assetType === AssetTypes.LINK_SCREENSHOT) {
+              content.screenshotAssetId = row.assets.id;
+            }
+            if (row.assets.assetType === AssetTypes.LINK_PDF) {
+              content.pdfAssetId = row.assets.id;
+            }
+            if (row.assets.assetType === AssetTypes.LINK_FULL_PAGE_ARCHIVE) {
+              content.fullPageArchiveAssetId = row.assets.id;
+            }
+            if (row.assets.assetType === AssetTypes.LINK_BANNER_IMAGE) {
+              content.imageAssetId = row.assets.id;
+            }
+            if (row.assets.assetType === AssetTypes.LINK_VIDEO) {
+              content.videoAssetId = row.assets.id;
+            }
+            if (
+              row.assets.assetType === AssetTypes.LINK_PRECRAWLED_ARCHIVE
+            ) {
+              content.precrawledArchiveAssetId = row.assets.id;
+            }
+            acc[bookmarkId].content = content;
+          }
+          if (acc[bookmarkId].content.type === BookmarkTypes.ASSET) {
+            const content = acc[bookmarkId].content;
+            if (row.assets.id === content.assetId) {
+              content.size = row.assets.size;
+            }
+          }
+          acc[bookmarkId].assets.push({
+            id: row.assets.id,
+            assetType: mapDBAssetTypeToUserType(row.assets.assetType),
+            fileName: row.assets.fileName,
+          });
+        }
+
+        return acc;
+      },
+      {},
+    );
+
+    const bookmarksArr = Object.values(bookmarksRes);
+
+    bookmarksArr.sort((a, b) => {
+      if (a.createdAt !== b.createdAt) {
+        return input.sortOrder === "asc"
+          ? a.createdAt.getTime() - b.createdAt.getTime()
+          : b.createdAt.getTime() - a.createdAt.getTime();
+      }
+      return b.id.localeCompare(a.id);
+    });
+
+    bookmarksArr.forEach((b) => {
+      b.tags.sort((a, b) =>
+        a.attachedBy === "ai" ? 1 : b.attachedBy === "ai" ? -1 : 0,
+      );
+    });
+
+    let nextCursor = null;
+    if (bookmarksArr.length > input.limit) {
+      const nextItem = bookmarksArr.pop()!;
+      nextCursor = { id: nextItem.id, createdAt: nextItem.createdAt };
     }
 
     return {
